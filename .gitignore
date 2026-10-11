@@ -1,0 +1,29 @@
+# --- Secrets & local config (NEVER commit) ---
+.codeagent/
+config.json
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# --- PyInstaller ---
+build/
+dist/
+*.spec
+
+# --- Runtime crash log (written by main.py next to the exe / source) ---
+CodeAgent.log
+
+# --- Generated / demo output ---
+demo_output/
+
+# --- Editors / OS ---
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
