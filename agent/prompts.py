@@ -9,21 +9,24 @@ Follow these strict guidelines:
 2. **Plan**: Before generating any code, outline the complete project directory structure, listing every file you will create.
 3. **Generate Code**: Write production-quality, working code file by file using the provided tools.
 4. **Dependencies**: Create proper dependency manifests (e.g., requirements.txt or package.json) with pinned versions.
-5. **Docker**: Write a Dockerfile and docker-compose.yml to make the project easily deployable.
+5. **Packaging**: Generate a Windows build.bat using PyInstaller --onefile --windowed, plus run.bat for running from source. Pin build dependencies separately in requirements-build.txt. Docker artifacts, if retained from the architecture, are optional backend documentation, never the way to play.
 6. **Documentation**: Write a comprehensive README.md with setup instructions, usage guide, and architecture overview.
 7. **Tests**: Generate meaningful unit and integration test cases for key components.
 8. **Tool Usage**: Use `create_file` to write each file and `create_directory` to set up the folder structure. Use `read_file` or `list_directory` to verify your progress.
-9. **Architecture Compliance**: Strictly follow the architecture patterns, class structures, API contracts, data models, and deployment topology described in the documentation.
+9. **Architecture Compliance**: Preserve the documented game behavior and domain responsibilities. The client's UPDATED requirement takes precedence over older web/cloud deployment details: the generated game MUST be a local desktop application. Explain this adaptation in the README. Backend contracts may be retained as optional reference artifacts; no service may be required to play.
 10. **Code Quality**: Include proper imports, type hints, error handling, logging, and inline comments. Follow language-specific best practices.
-11. **Completeness**: Ensure ALL classes, APIs, data models, and interactions shown in the UML diagrams are implemented.
-12. **Playable Frontend (REQUIRED, do not skip)**: The documentation describes a *web-based, interactive* product (for SpaceFractions: an introductory movie/scene, a main menu, a series of fraction questions, and an ending scene with feedback and score). Besides the backend, you MUST generate a self-contained, browser-playable frontend under a `frontend/` directory:
-    - `frontend/index.html`, `frontend/styles.css`, `frontend/app.js` (plain HTML/CSS/JS - no build step, no npm install, no framework CDN required).
-    - It MUST implement the complete user experience end-to-end: intro/animated scene -> main menu -> a sequence of multiple-choice fraction questions with immediate right/wrong feedback -> running score -> ending/feedback screen with a final score and a "Play again" option.
-    - It MUST be fully playable by simply opening `frontend/index.html` in a browser, with NO backend, NO server, and NO network access: embed a set of sample fraction questions and a working offline "demo mode".
-    - If a backend is reachable it may optionally use it, but the offline demo mode is mandatory and must be the default so the game always works.
-    - The README MUST contain a clearly-marked "Play the game" section stating: open `frontend/index.html` in a web browser (no installation required).
+11. **Completeness**: Implement the game, question, and player responsibilities locally, including pause/resume, help, and saved scores. Document how local modules replace remote services.
+12. **Native Desktop Game (REQUIRED, do not skip)**:
+    - Use Python 3.10+ and tkinter for a real desktop window. No browser, HTML entry point, webview, local HTTP server, or network dependency for gameplay.
+    - Place main.py, game.py, storage.py, requirements.txt, requirements-build.txt, run.bat, build.bat, README.md, tests/test_game.py, and tests/test_storage.py together at the project root (directly in the output directory, or in one project subfolder).
+    - main.py launches the tkinter UI under an if __name__ == '__main__' guard. Keep game rules in game.py and persistence in storage.py so tests run without opening windows.
+    - Implement intro/animated scene -> main menu -> multiple-choice fraction questions with immediate right/wrong feedback -> running score/streak -> ending/feedback screen with final score and a "Play again" option. Include pause/resume and help.
+    - Embed sample questions. Persist scores under the current user's LOCALAPPDATA directory (with a home-directory fallback), never beside the executable. Handle missing/corrupt save files and write failures without crashing the game.
+    - Use standard-library-only runtime dependencies where possible. Bundle any assets for the executable and resolve their paths correctly when frozen. No API key is needed to play.
+    - run.bat and build.bat must change to their own directory, quote paths with spaces, report failures, and return a nonzero exit code on failure. build.bat installs requirements-build.txt and builds dist/SpaceFractions.exe (or a documented project-specific name). Players of the packaged executable do not need Python; building or running source does require Python with tkinter.
+    - The README MUST contain a "Play the game" section: double-click dist/SpaceFractions.exe after building, or run run.bat / python main.py from source. Include build and offline test commands, local save location, and the architecture adaptation.
 
-When you have generated ALL necessary files for the complete project (backend AND the playable frontend), state clearly 'DONE' and provide a final summary listing every file created with a one-line description.
+When you have generated ALL necessary files for the playable desktop project, state clearly 'DONE' and provide a final summary listing every file created with a one-line description. Your tools write files only: do not claim to have built an executable or run tests. Explain that build.bat creates the executable.
 """
 
 def build_generation_prompt(architecture_data: Dict[str, Any]) -> str:
@@ -116,14 +119,15 @@ def build_generation_prompt(architecture_data: Dict[str, Any]) -> str:
     prompt += "=" * 60 + "\n\n"
     prompt += "1. First, outline your plan: list the directory structure and every file you will create.\n"
     prompt += "2. Then, execute the plan by creating each directory and file using the provided tools.\n"
-    prompt += "3. Ensure the generated project is complete, runnable, and follows the architecture exactly.\n"
-    prompt += "4. MANDATORY: also create a self-contained, browser-playable frontend under `frontend/`\n"
-    prompt += "   (`index.html`, `styles.css`, `app.js`) implementing the full game flow - intro scene,\n"
-    prompt += "   main menu, multiple-choice fraction questions with feedback, running score, and an\n"
-    prompt += "   ending/feedback screen. It must work offline by opening `frontend/index.html` directly\n"
-    prompt += "   in a browser (embed sample questions; no server, build, or network needed). This is\n"
-    prompt += "   required and must not be skipped, even if the architecture only lists backend artifacts.\n"
-    prompt += "5. In the README, add a 'Play the game' section: open `frontend/index.html` in a browser.\n"
-    prompt += "6. When finished, say 'DONE' and list all created files.\n"
+    prompt += "3. UPDATED CLIENT REQUIREMENT: generate a local desktop application using Python/tkinter.\n"
+    prompt += "   This overrides older web/cloud deployment requirements in the supplied architecture.\n"
+    prompt += "4. Implement the full offline game: intro, main menu, questions, feedback, score, pause/resume,\n"
+    prompt += "   help, ending screen, replay, and local score persistence. No browser or server is required.\n"
+    prompt += "5. Required project files: main.py, game.py, storage.py, requirements.txt, requirements-build.txt,\n"
+    prompt += "   run.bat, build.bat, README.md, tests/test_game.py, tests/test_storage.py. Use PyInstaller\n"
+    prompt += "   to package a windowed Windows .exe. Include all assets and offline tests.\n"
+    prompt += "6. README 'Play the game': build.bat then double-click dist/SpaceFractions.exe; for source use\n"
+    prompt += "   run.bat or python main.py. Explain Python is needed only for source/building.\n"
+    prompt += "7. When all files are written, say 'DONE' and list them. Do not claim tests/builds were run.\n"
     
     return prompt

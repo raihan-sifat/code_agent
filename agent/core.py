@@ -8,6 +8,7 @@ import logging
 from api.deepseek_client import DeepSeekClient
 from .tools import TOOL_DEFINITIONS, ToolExecutor
 from .prompts import SYSTEM_PROMPT, build_generation_prompt
+from .desktop_validation import validate_desktop_output
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,7 @@ class CodeAgent:
         
         turn_count = 0
         idle_turns = 0
+        completion_failures = 0
 
         def _cancelled() -> bool:
             return cancel_event is not None and cancel_event.is_set()
@@ -155,8 +157,25 @@ class CodeAgent:
                         on_message(content)
                         
                     if DONE_PATTERN.search(content):
+                        problems = validate_desktop_output(output_dir, tool_executor.created_files)
+                        if problems:
+                            completion_failures += 1
+                            details = "Desktop output is incomplete:\n" + "\n".join(problems)
+                            if completion_failures >= 3:
+                                if on_error:
+                                    on_error(details)
+                                return False
+                            if on_message:
+                                on_message(details + "\nRequesting corrections from the model.")
+                            messages.append({
+                                "role": "user",
+                                "content": details + "\nUse create_file to fix these issues before saying DONE.",
+                            })
+                            idle_turns = 0
+                            continue
                         if on_message:
                             on_message("Agent has completed project generation.")
+                            on_message("Desktop source checks passed. Run build.bat in the generated project to create the game .exe; build and gameplay have not been tested by the agent.")
                         return True
                 
                 if idle_turns >= ABORT_AFTER_IDLE_TURNS:

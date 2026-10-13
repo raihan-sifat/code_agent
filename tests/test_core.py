@@ -58,7 +58,8 @@ def run(agent, tmp_path, **callbacks):
 
 @pytest.fixture
 def fast(monkeypatch):
-    """Speed up: no backoff sleeps, small turn/idle budgets."""
+    """Isolate conversation mechanics; desktop acceptance has separate real tests."""
+    monkeypatch.setattr(core, "validate_desktop_output", lambda *args: [])
     monkeypatch.setattr(core.time, "sleep", lambda s: None)
     monkeypatch.setattr(core, "MAX_TURNS", 8)
     monkeypatch.setattr(core, "NUDGE_AFTER_IDLE_TURNS", 2)

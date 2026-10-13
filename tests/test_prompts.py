@@ -79,15 +79,22 @@ class TestBuildGenerationPrompt:
         assert "DONE" in prompt
         assert "create_file" in prompt or "outline" in prompt.lower()
 
-    def test_generation_prompt_requires_playable_frontend(self):
+    def test_generation_prompt_requires_desktop_game(self):
         prompt = build_generation_prompt(FULL_DATA)
-        assert "frontend/index.html" in prompt
+        assert "local desktop application" in prompt
+        assert "tkinter" in prompt
+        assert "build.bat" in prompt
+        assert "dist/SpaceFractions.exe" in prompt
+        assert "overrides older web/cloud" in prompt
         assert "Play the game" in prompt
         assert "offline" in prompt.lower()
 
-    def test_system_prompt_requires_playable_frontend(self):
-        assert "frontend/" in SYSTEM_PROMPT
-        assert "index.html" in SYSTEM_PROMPT
+    def test_system_prompt_requires_native_desktop_game(self):
+        assert "local desktop application" in SYSTEM_PROMPT
+        assert "tkinter" in SYSTEM_PROMPT
+        assert "PyInstaller --onefile --windowed" in SYSTEM_PROMPT
+        assert "LOCALAPPDATA" in SYSTEM_PROMPT
+        assert "frontend/index.html" not in SYSTEM_PROMPT
         assert "Play the game" in SYSTEM_PROMPT
         # The full game flow must be spelled out.
         assert "main menu" in SYSTEM_PROMPT.lower()

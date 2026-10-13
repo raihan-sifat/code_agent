@@ -118,9 +118,10 @@ class CodeAgentApp(ctk.CTk):
                 "How to use:\n"
                 "  1.  Paste your DeepSeek API key, click \u201cTest Key\u201d to confirm it works, then \u201cSave\u201d (optional).\n"
                 "  2.  Browse to the Architecture Doc (.md) and the Architecture Views (.md) files.\n"
-                "  3.  Choose an Output Directory \u2013 the generated project is written there.\n"
+                "  3.  Choose an Output Directory \u2013 the native desktop game is written there.\n"
                 "  4.  Click \u201cGenerate Project\u201d and follow the log below. "
-                "Use Pause/Resume or Cancel at any time; you can start a new run afterwards."
+                "Use Pause/Resume or Cancel at any time.\n"
+                "  5.  Run the generated build.bat, then open the game .exe in dist. Source launch: run.bat."
             ),
             justify="left",
             anchor="w",
@@ -325,7 +326,7 @@ class CodeAgentApp(ctk.CTk):
         self.progress.start()
         self.log_text.delete("1.0", tk.END)
         
-        self._log_message("Starting project generation...", "info")
+        self._log_message("Generating a local desktop game (Python/tkinter, offline play, Windows .exe build script)...", "info")
         
         thread = threading.Thread(
             target=self._run_agent_task, 
@@ -379,7 +380,7 @@ class CodeAgentApp(ctk.CTk):
                 self._log_message("Project generation cancelled by user.", "error")
             elif success:
                 self._log_message("Project generation completed successfully!", "success")
-                self.after(0, lambda: messagebox.showinfo("Success", "Project generated successfully!"))
+                self.after(0, lambda: messagebox.showinfo("Success", "Desktop game source generated successfully!\n\nRun build.bat in the generated project to create the game executable in dist.\nOr use run.bat to play from source with Python.\n\nBuild and gameplay still need to be verified."))
             else:
                 self._log_message("Project generation failed. Check logs.", "error")
                 self.after(0, lambda: messagebox.showerror("Error", "Project generation failed."))

@@ -1,6 +1,10 @@
 # Code Agent - AI Code Generator
 
-Code Agent is a lightweight, AI-powered desktop application that reads architecture documentation and automatically generates a full software project using DeepSeek-V4-Pro LLM. 
+Code Agent is a lightweight, AI-powered desktop application that reads architecture documentation and generates a native desktop game project using the DeepSeek API.
+
+The generated game is also a local desktop application: Python/tkinter, offline play,
+local score storage, and a PyInstaller build script for a standalone Windows `.exe`.
+The updated desktop requirement takes precedence over older web/cloud architecture inputs.
 
 ## Features
 - **GUI Application**: Modern, dark-themed interface built with `customtkinter`.
@@ -30,6 +34,15 @@ Code Agent is a lightweight, AI-powered desktop application that reads architect
 3. Select your **Architecture Documentation** and **Architecture Views** markdown files.
 4. Choose an **Output Directory** where the project will be generated.
 5. Click **Generate Project** and wait for the agent to finish.
+6. In the generated project, run `build.bat` to package the game, then double-click
+   `dist/SpaceFractions.exe`. Building requires Python and build dependencies; the
+   packaged game requires neither Python nor a DeepSeek key.
+7. To play from source with Python installed, use `run.bat` or `python main.py`.
+
+The agent writes source files and build instructions. It performs structural checks
+before reporting completion, but does not execute generated code, run its tests, or
+compile the game. Follow the generated README to test and build it. An earlier
+published CodeAgent executable must be rebuilt to include this new generation target.
 
 ### API key storage
 
@@ -106,6 +119,11 @@ You can build a standalone Windows executable using PyInstaller:
 - **Path-traversal guard** (`tools.py`) — tool calls cannot escape the chosen output directory (`..`, absolute paths, and drive-letter edge cases are rejected).
 - **Bounded turns + idle detection** (`core.py`) — `MAX_TURNS=60`; after 2 idle turns the model is nudged, after 5 it aborts cleanly.
 - **Strict completion** — generation only ends on a word-bounded `DONE`, so prose can't false-trigger success.
+- **Desktop output checks** — `DONE` also requires the desktop entry point, game/storage
+  modules, manifests, launch/build scripts, README, and tests written during the current
+  run. Python syntax, native toolkit imports, and PyInstaller build flags are checked.
+  Missing artifacts are returned to the model for correction; repeated failure aborts.
+  These checks do not prove runtime or packaging correctness.
 - **Result truncation** — tool results are capped at 4000 chars to keep context bounded.
 - **Secret scrubbing** — the API key is redacted from all logs and error messages (`utils/security.py`).
 
