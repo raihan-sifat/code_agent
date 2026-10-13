@@ -125,9 +125,22 @@ You can build a standalone Windows executable using PyInstaller:
   Missing artifacts are returned to the model for correction; repeated failure aborts.
   These checks do not prove runtime or packaging correctness.
 - **Result truncation** — tool results are capped at 4000 chars to keep context bounded.
+- **Tool-call recovery** — malformed JSON, missing fields, and invalid argument types
+  are rejected before files are opened. The model is asked to resend corrected calls;
+  three consecutive failed tool turns stop generation with a specific error. Failed
+  writes must be retried before completion, including files outside the required set.
+- **Output-limit handling** — responses marked as cut short by the provider are not
+  executed or accepted as completion. The model is instructed to write one complete
+  file per response and split large modules when necessary.
 - **Secret scrubbing** — the API key is redacted from all logs and error messages (`utils/security.py`).
 
 ## Troubleshooting
+
+**File creation reports missing arguments or invalid JSON.**
+These errors come from the model's tool calls, not missing GUI inputs. The updated
+agent reports the specific problem and requests corrected calls automatically. If
+repeated corrections fail, generation stops instead of reporting success. Relaunch
+the rebuilt executable to use this fix; an already-running app still uses its old code.
 
 **"Using SOCKS proxy, but the 'socksio' package is not installed" on Generate.**
 Your machine sets a SOCKS proxy via the `all_proxy`/`ALL_PROXY` environment variable.

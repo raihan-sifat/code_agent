@@ -34,6 +34,13 @@ def make_client(message=None, create=None):
 
 
 class TestChatResponseMapping:
+    @pytest.mark.parametrize("reason", ["stop", "tool_calls", "length"])
+    def test_finish_reason_is_preserved(self, reason):
+        response = SimpleNamespace(choices=[SimpleNamespace(
+            message=FakeMessage(content="partial"), finish_reason=reason)])
+        client = make_client(create=lambda **kwargs: response)
+        assert client.chat(messages=[])["finish_reason"] == reason
+
     def test_no_tool_calls_key_when_absent(self):
         """Regression: the result must not carry a tool_calls key at all when
         the model made no tool calls (null leaked to the API before)."""

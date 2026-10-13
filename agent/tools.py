@@ -1,5 +1,6 @@
 import os
 import json
+from dataclasses import dataclass
 from typing import Dict, Any, List
 
 TOOL_DEFINITIONS = [
@@ -76,6 +77,12 @@ TOOL_DEFINITIONS = [
     }
 ]
 
+@dataclass(frozen=True)
+class ToolResult:
+    content: str
+    is_error: bool = False
+
+
 class ToolExecutor:
     """Executes tool calls requested by the agent."""
     
@@ -105,70 +112,63 @@ class ToolExecutor:
 
     def execute(self, tool_name: str, arguments: dict) -> str:
         """Execute a tool call. Returns result message string."""
+        return self.execute_result(tool_name, arguments).content
+
+    def execute_result(self, tool_name: str, arguments: Any) -> ToolResult:
+        """Validate before touching files and report failures separately from content."""
         try:
+            definition = next((tool["function"] for tool in TOOL_DEFINITIONS
+                               if tool["function"]["name"] == tool_name), None)
+            if definition is None:
+                raise ValueError(f"Unknown tool {tool_name}")
+            if not isinstance(arguments, dict):
+                raise ValueError("Arguments must be a JSON object, not a list, scalar or null.")
+            schema = definition["parameters"]
+            for name in schema.get("required", []):
+                if name not in arguments:
+                    raise ValueError(f"Missing required '{name}' argument. Retry with all required fields: "
+                                     + ", ".join(schema["required"]) + ".")
+            for name in schema["properties"]:
+                if name in arguments and not isinstance(arguments[name], str):
+                    raise ValueError(f"'{name}' must be a string.")
+            if "path" in arguments:
+                self._validate_path(arguments["path"])
+
             if tool_name == "create_file":
-                return self._create_file(arguments.get("path"), arguments.get("content"))
+                result = self._create_file(arguments["path"], arguments["content"])
             elif tool_name == "create_directory":
-                return self._create_directory(arguments.get("path"))
+                result = self._create_directory(arguments["path"])
             elif tool_name == "read_file":
-                return self._read_file(arguments.get("path"))
-            elif tool_name == "list_directory":
-                return self._list_directory(arguments.get("path") or ".")
+                result = self._read_file(arguments["path"])
             else:
-                return f"Error: Unknown tool {tool_name}"
+                result = self._list_directory(arguments.get("path", "."))
+            return ToolResult(result)
         except Exception as e:
-            return f"Error executing {tool_name}: {str(e)}"
+            path = arguments.get("path") if isinstance(arguments, dict) else None
+            target = f" for {path!r}" if isinstance(path, str) else ""
+            return ToolResult(f"Error executing {tool_name}{target}: {e}", is_error=True)
             
     def _create_file(self, path: str, content: str) -> str:
-        if not path or content is None:
-            return "Error: Missing 'path' or 'content' arguments."
-            
-        try:
-            abs_path = self._validate_path(path)
-            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
-            
-            with open(abs_path, 'w', encoding='utf-8') as f:
-                f.write(content)
-                
-            self.created_files.append(path)
-            return f"Successfully created file: {path}"
-        except Exception as e:
-            return f"Failed to create file {path}: {str(e)}"
+        abs_path = self._validate_path(path)
+        os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+        with open(abs_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        self.created_files.append(path)
+        return f"Successfully created file: {path}"
             
     def _create_directory(self, path: str) -> str:
-        if not path:
-            return "Error: Missing 'path' argument."
-            
-        try:
-            abs_path = self._validate_path(path)
-            os.makedirs(abs_path, exist_ok=True)
-            return f"Successfully created directory: {path}"
-        except Exception as e:
-            return f"Failed to create directory {path}: {str(e)}"
+        abs_path = self._validate_path(path)
+        os.makedirs(abs_path, exist_ok=True)
+        return f"Successfully created directory: {path}"
             
     def _read_file(self, path: str) -> str:
-        if not path:
-            return "Error: Missing 'path' argument."
-            
-        try:
-            abs_path = self._validate_path(path)
-            if not os.path.exists(abs_path) or not os.path.isfile(abs_path):
-                return f"Error: File not found at {path}"
-                
-            with open(abs_path, 'r', encoding='utf-8') as f:
-                return f.read()
-        except Exception as e:
-            return f"Failed to read file {path}: {str(e)}"
+        abs_path = self._validate_path(path)
+        with open(abs_path, 'r', encoding='utf-8') as f:
+            return f.read()
             
     def _list_directory(self, path: str) -> str:
-        try:
-            abs_path = self._validate_path(path)
-            if not os.path.exists(abs_path) or not os.path.isdir(abs_path):
-                return f"Error: Directory not found at {path}"
-                
-            items = os.listdir(abs_path)
-            if not items:
-                return f"Directory {path} is empty."
-            return json.dumps(items)
-        except Exception as e:
-            return f"Failed to list directory {path}: {str(e)}"
+        abs_path = self._validate_path(path)
+        items = os.listdir(abs_path)
+        if not items:
+            return f"Directory {path} is empty."
+        return json.dumps(items)

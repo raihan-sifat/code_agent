@@ -28,6 +28,8 @@ class FakeClient:
         snapshot = []
         for m in messages:
             entry = {"role": m["role"], "content": m.get("content", "")}
+            if "tool_call_id" in m:
+                entry["tool_call_id"] = m["tool_call_id"]
             if "tool_calls" in m:
                 entry["tool_calls"] = m["tool_calls"]
             snapshot.append(entry)
@@ -177,24 +179,156 @@ class TestAgentLoop:
         agent.model = "fake"
         assert run(agent, tmp_path) is True
 
-    def test_malformed_tool_arguments_do_not_crash(self, fast, monkeypatch, tmp_path):
+    def test_malformed_tool_arguments_require_a_retry(self, fast, monkeypatch, tmp_path):
         bad_call = {
             "id": "call_bad",
             "type": "function",
             "function": {"name": "create_file", "arguments": "{not valid json"},
         }
-        agent, _ = make_agent(
+        agent, client = make_agent(
             [
                 {"content": "", "tool_calls": [bad_call]},
+                {"tool_calls": [file_call("fixed.py", "print('ok')")]},
                 {"content": "DONE"},
             ],
             monkeypatch,
             tmp_path,
         )
         tools_seen = []
-        ok = run(agent, tmp_path, on_tool=lambda name, res: tools_seen.append(name))
+        ok = run(agent, tmp_path, on_tool=lambda name, res: tools_seen.append(res))
         assert ok is True
-        assert tools_seen == ["create_file"]
+        assert "not valid JSON" in tools_seen[0]
+        assert "Missing" not in tools_seen[0]
+        assert any("Retry the failed operations" in m["content"]
+                   for m in client.received[1] if m["role"] == "user")
+        assert (tmp_path / "fixed.py").read_text() == "print('ok')"
+
+
+def file_call(path, content=None, call_id="write_1"):
+    arguments = {"path": path}
+    if content is not None:
+        arguments["content"] = content
+    return {"id": call_id, "type": "function", "function": {
+        "name": "create_file", "arguments": json.dumps(arguments)}}
+
+
+class TestToolRecovery:
+    @pytest.mark.parametrize("arguments", ["{}", "null", "[]", "42", '"text"', None])
+    def test_invalid_arguments_can_be_corrected(self, fast, monkeypatch, tmp_path, arguments):
+        bad = file_call("game.py")
+        bad["function"]["arguments"] = arguments
+        agent, client = make_agent([
+            {"tool_calls": [bad]},
+            {"tool_calls": [file_call("game.py", "# complete")]},
+            {"content": "DONE"},
+        ], monkeypatch, tmp_path)
+        errors = []
+        assert run(agent, tmp_path, on_error=errors.append)
+        assert errors == []
+        assert (tmp_path / "game.py").read_text() == "# complete"
+        assert any(m["role"] == "tool" and "Error" in m["content"]
+                   for m in client.received[1])
+
+    def test_failed_optional_file_blocks_success_until_same_file_is_retried(
+            self, fast, monkeypatch, tmp_path):
+        agent, client = make_agent([
+            {"tool_calls": [file_call("ui_scenes.py")]},
+            {"tool_calls": [file_call("other.py", "# unrelated")]},
+            {"content": "DONE"},
+            {"tool_calls": [file_call("./ui_scenes.py", "# repaired")]},
+            {"content": "DONE"},
+        ], monkeypatch, tmp_path)
+        assert run(agent, tmp_path)
+        assert len(client.received) == 5
+        assert any("Unresolved write:" in m["content"] and "ui_scenes.py" in m["content"]
+                   for m in client.received[3])
+
+    def test_unresolved_write_cannot_be_ignored_by_saying_done(self, fast, monkeypatch, tmp_path):
+        agent, _ = make_agent([
+            {"tool_calls": [file_call("ui_scenes.py")]},
+            *[{"content": "DONE"}] * 3,
+        ], monkeypatch, tmp_path)
+        errors, messages = [], []
+        assert not run(agent, tmp_path, on_error=errors.append, on_message=messages.append)
+        assert "Unresolved write:" in errors[-1]
+        assert "Agent has completed project generation." not in messages
+
+    def test_unknown_failed_write_needs_a_later_turn_retry(self, fast, monkeypatch, tmp_path):
+        bad = file_call("unknown.py")
+        bad["function"]["arguments"] = "{broken json"
+        agent, _ = make_agent([
+            {"tool_calls": [bad, file_call("other.py", "# unrelated")]},
+            *[{"content": "DONE"}] * 3,
+        ], monkeypatch, tmp_path)
+        errors = []
+        assert not run(agent, tmp_path, on_error=errors.append)
+        assert "Unresolved write:" in errors[-1]
+
+    def test_repeated_bad_calls_abort_with_actionable_error(self, fast, monkeypatch, tmp_path):
+        agent, client = make_agent([
+            {"tool_calls": [file_call("game.py")]}
+        ] * 5, monkeypatch, tmp_path)
+        errors = []
+        assert not run(agent, tmp_path, on_error=errors.append)
+        assert len(client.received) == core.MAX_TOOL_REPAIR_TURNS
+        assert "repeated tool failures" in errors[-1]
+        assert "game.py" in errors[-1] and "content" in errors[-1]
+        assert not (tmp_path / "game.py").exists()
+
+    def test_all_tool_calls_receive_results_before_retry(self, fast, monkeypatch, tmp_path):
+        agent, client = make_agent([
+            {"tool_calls": [file_call("a.py", call_id="bad_a"),
+                            file_call("b.py", call_id="bad_b")]},
+            {"tool_calls": [file_call("a.py", "# a", "fixed_a"),
+                            file_call("b.py", "# b", "fixed_b")]},
+            {"content": "DONE"},
+        ], monkeypatch, tmp_path)
+        assert run(agent, tmp_path)
+        retry_context = client.received[1]
+        assert [m["tool_call_id"] for m in retry_context if m["role"] == "tool"] == ["bad_a", "bad_b"]
+        assert retry_context[-1]["role"] == "user"
+
+    @pytest.mark.parametrize("arguments", ['{"path":"game.py","content":"half',
+                                          json.dumps({"path": "game.py", "content": "partial"})])
+    def test_output_limit_never_overwrites_file(self, fast, monkeypatch, tmp_path, arguments):
+        (tmp_path / "game.py").write_text("original")
+        bad = file_call("game.py")
+        bad["function"]["arguments"] = arguments
+        agent, _ = make_agent([
+            {"tool_calls": [bad], "finish_reason": "length"},
+            {"tool_calls": [file_call("game.py", "# complete")]},
+            {"content": "DONE"},
+        ], monkeypatch, tmp_path)
+        results = []
+
+        def on_tool(name, result):
+            results.append(result)
+            if "output limit" in result:
+                assert (tmp_path / "game.py").read_text() == "original"
+
+        assert run(agent, tmp_path, on_tool=on_tool)
+        assert "output limit" in results[0]
+        assert (tmp_path / "game.py").read_text() == "# complete"
+
+    def test_truncated_done_is_not_completion(self, fast, monkeypatch, tmp_path):
+        agent, client = make_agent([
+            {"content": "DONE", "finish_reason": "length"},
+            {"content": "DONE", "finish_reason": "stop"},
+        ], monkeypatch, tmp_path)
+        assert run(agent, tmp_path)
+        assert len(client.received) == 2
+        assert "output limit" in client.received[1][-1]["content"]
+
+    def test_file_containing_error_text_is_not_a_failed_tool(self, fast, monkeypatch, tmp_path):
+        (tmp_path / "log.txt").write_text("Error: example message")
+        call = {"id": "read", "type": "function", "function": {
+            "name": "read_file", "arguments": json.dumps({"path": "log.txt"})}}
+        agent, client = make_agent([
+            {"tool_calls": [call]}, {"content": "DONE"},
+        ], monkeypatch, tmp_path)
+        assert run(agent, tmp_path)
+        assert not any("Retry the failed operations" in m["content"]
+                       for m in client.received[1] if m["role"] == "user")
 
 
 class TestPauseCancel:

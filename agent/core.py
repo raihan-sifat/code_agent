@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import threading
 import time
@@ -6,7 +7,7 @@ from typing import Callable, Optional, Dict, Any
 import logging
 
 from api.deepseek_client import DeepSeekClient
-from .tools import TOOL_DEFINITIONS, ToolExecutor
+from .tools import TOOL_DEFINITIONS, ToolExecutor, ToolResult
 from .prompts import SYSTEM_PROMPT, build_generation_prompt
 from .desktop_validation import validate_desktop_output
 
@@ -24,6 +25,7 @@ DONE_PATTERN = re.compile(r"\bDONE\b")
 # Tool results (e.g. read_file of a large source file) are truncated before
 # being sent back to the model to keep the context bounded.
 MAX_TOOL_RESULT_CHARS = 4000
+MAX_TOOL_REPAIR_TURNS = 3
 
 class CodeAgent:
     """Main CodeAgent class orchestrating the code generation process."""
@@ -60,6 +62,32 @@ class CodeAgent:
         turn_count = 0
         idle_turns = 0
         completion_failures = 0
+        tool_repair_turns = 0
+        # A failed write with a known target must be retried for that same target.
+        # If the arguments were unreadable, require a successful write on a later turn.
+        pending_writes = {}
+
+        def _request_tool_repair(details: str) -> bool:
+            nonlocal tool_repair_turns
+            tool_repair_turns += 1
+            if tool_repair_turns >= MAX_TOOL_REPAIR_TURNS:
+                if on_error:
+                    on_error("Generation stopped after repeated tool failures:\n" + details)
+                return False
+            if on_message:
+                on_message("Requesting corrected tool calls from the model "
+                           f"(attempt {tool_repair_turns}/{MAX_TOOL_REPAIR_TURNS - 1}).")
+            messages.append({
+                "role": "user",
+                "content": (
+                    details + "\nRetry the failed operations before continuing or saying DONE. "
+                    "Send one create_file call per response, using valid JSON with both "
+                    "a non-empty string 'path' and the full string 'content'. Escape newlines "
+                    "and quotes inside JSON strings. Split large modules into smaller complete "
+                    "files if needed; never write placeholders or partial file contents."
+                ),
+            })
+            return True
 
         def _cancelled() -> bool:
             return cancel_event is not None and cancel_event.is_set()
@@ -105,6 +133,7 @@ class CodeAgent:
                 
                 content = response.get("content") or ""
                 tool_calls = response.get("tool_calls") or []
+                response_truncated = response.get("finish_reason") == "length"
                 
                 assistant_message = {
                     "role": "assistant",
@@ -117,6 +146,8 @@ class CodeAgent:
                 # Check for tool calls
                 if tool_calls:
                     idle_turns = 0
+                    failures = []
+                    previous_unknowns = {key for key in pending_writes if key[1] is None}
                     for tool_call in tool_calls:
                         if _cancelled():
                             msg = "Generation cancelled by user."
@@ -126,13 +157,49 @@ class CodeAgent:
                             return False
                         func = tool_call.get("function", {})
                         tool_name = func.get("name")
+                        arguments = None
                         try:
-                            arguments = json.loads(func.get("arguments", "{}"))
-                        except json.JSONDecodeError:
-                            arguments = {}
-                            
-                        # Execute tool
-                        result = tool_executor.execute(tool_name, arguments)
+                            arguments = json.loads(func.get("arguments", ""))
+                        except (json.JSONDecodeError, TypeError):
+                            outcome = ToolResult(
+                                f"Error: {tool_name} arguments are not valid JSON. "
+                                "No operation was performed. Resend the complete JSON object.",
+                                is_error=True,
+                            )
+                        else:
+                            outcome = None
+
+                        # Even valid JSON can contain an incomplete file when the
+                        # provider reports an output limit. Never execute that response.
+                        if response_truncated:
+                            outcome = ToolResult(
+                                "Error: The model response reached its output limit "
+                                "(finish_reason=length). No operation was performed. "
+                                "Retry with one smaller, complete file per response.",
+                                is_error=True,
+                            )
+                        if outcome is None:
+                            outcome = tool_executor.execute_result(tool_name, arguments)
+
+                        if outcome.is_error:
+                            failures.append(outcome.content)
+                        if tool_name in ("create_file", "create_directory"):
+                            path = arguments.get("path") if isinstance(arguments, dict) else None
+                            try:
+                                target = os.path.normcase(tool_executor._validate_path(path))
+                            except (ValueError, TypeError):
+                                target = None
+                            key = (tool_name, target)
+                            if outcome.is_error:
+                                pending_writes[key] = outcome.content
+                                previous_unknowns.discard(key)
+                            else:
+                                pending_writes.pop(key, None)
+                                unknown_key = (tool_name, None)
+                                if unknown_key in previous_unknowns:
+                                    pending_writes.pop(unknown_key, None)
+
+                        result = outcome.content
                         if len(result) > MAX_TOOL_RESULT_CHARS:
                             result = result[:MAX_TOOL_RESULT_CHARS] + "\n...[truncated]"
                         
@@ -146,7 +213,23 @@ class CodeAgent:
                             "name": tool_name,
                             "content": result
                         })
+                    # Reply to every tool call before asking for a correction so the
+                    # API conversation remains valid even when several calls fail.
+                    if failures:
+                        if not _request_tool_repair("\n".join(failures)):
+                            return False
+                    else:
+                        tool_repair_turns = 0
                     # Loop continues to send tool results back to LLM
+                    continue
+
+                if response_truncated:
+                    idle_turns = 0
+                    if not _request_tool_repair(
+                        "The model response reached its output limit (finish_reason=length); "
+                        "generation is not complete."
+                    ):
+                        return False
                     continue
                 
                 # No tool calls: either a final message or a stalled turn.
@@ -158,6 +241,8 @@ class CodeAgent:
                         
                     if DONE_PATTERN.search(content):
                         problems = validate_desktop_output(output_dir, tool_executor.created_files)
+                        problems.extend("Unresolved write: " + error
+                                        for error in pending_writes.values())
                         if problems:
                             completion_failures += 1
                             details = "Desktop output is incomplete:\n" + "\n".join(problems)

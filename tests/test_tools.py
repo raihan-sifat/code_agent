@@ -100,6 +100,40 @@ class TestToolExecutor:
         assert "f1.txt" in self.executor.created_files
         assert "f2.txt" in self.executor.created_files
 
+    @pytest.mark.parametrize("content", [None, 1, [], {}, False])
+    def test_invalid_content_does_not_damage_existing_file(self, content):
+        self.executor.execute("create_file", {"path": "game.py", "content": "original"})
+        self.executor.created_files.clear()
+        result = self.executor.execute_result("create_file", {"path": "game.py", "content": content})
+        assert result.is_error
+        assert "'content' must be a string" in result.content
+        with open(os.path.join(self.tmpdir, "game.py")) as f:
+            assert f.read() == "original"
+        assert self.executor.created_files == []
+
+    def test_missing_content_reports_target_and_required_field(self):
+        result = self.executor.execute_result("create_file", {"path": "ui_scenes.py"})
+        assert result.is_error
+        assert "ui_scenes.py" in result.content and "Missing required 'content'" in result.content
+        assert not os.path.exists(os.path.join(self.tmpdir, "ui_scenes.py"))
+
+    def test_empty_content_is_allowed_for_package_marker(self):
+        result = self.executor.execute_result("create_file", {"path": "__init__.py", "content": ""})
+        assert not result.is_error
+        assert os.path.isfile(os.path.join(self.tmpdir, "__init__.py"))
+
+    @pytest.mark.parametrize("path", [None, 7, [], "", "   "])
+    def test_invalid_path_has_no_side_effects(self, path):
+        result = self.executor.execute_result("create_file", {"path": path, "content": "text"})
+        assert result.is_error
+        assert os.listdir(self.tmpdir) == []
+
+    def test_list_directory_without_path_still_defaults_to_root(self):
+        self.executor.execute("create_file", {"path": "a.txt", "content": "a"})
+        result = self.executor.execute_result("list_directory", {})
+        assert not result.is_error
+        assert json.loads(result.content) == ["a.txt"]
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -107,7 +107,8 @@ class DeepSeekClient:
             return self.client.chat.completions.create(**kwargs)
             
         response = self._retry_with_backoff(_call_api)
-        choice = response.choices[0].message
+        completion = response.choices[0]
+        choice = completion.message
 
         # NOTE: only include the "tool_calls" key when there are actual tool
         # calls. Sending `tool_calls: null` in an assistant message is rejected
@@ -115,6 +116,7 @@ class DeepSeekClient:
         result = {
             "role": choice.role,
             "content": choice.content or "",
+            "finish_reason": getattr(completion, "finish_reason", None),
         }
 
         if choice.tool_calls:
